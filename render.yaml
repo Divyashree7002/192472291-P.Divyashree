@@ -39,7 +39,6 @@ services:
   - type: web
     name: smartspace-frontend
     runtime: static
-    plan: free
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
