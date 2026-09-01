@@ -20,8 +20,21 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   const { user, isAuthenticated, isLoading, hasRole } = useAuth();
   const location = useLocation();
   const { addToast } = useToast();
+  const [safetyTimeoutExpired, setSafetyTimeoutExpired] = React.useState(false);
 
   const isRolePermitted = !allowedRoles || allowedRoles.length === 0 || hasRole(allowedRoles);
+
+  useEffect(() => {
+    if (isLoading) {
+      const timer = setTimeout(() => {
+        console.warn('[SmartSpace Auth] ProtectedRoute safety timeout reached.');
+        setSafetyTimeoutExpired(true);
+      }, 4000);
+      return () => clearTimeout(timer);
+    } else {
+      setSafetyTimeoutExpired(false);
+    }
+  }, [isLoading]);
 
   useEffect(() => {
     if (!isLoading && isAuthenticated && !isRolePermitted) {
@@ -33,7 +46,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
     }
   }, [isLoading, isAuthenticated, isRolePermitted, allowedRoles, user?.role, addToast]);
 
-  if (isLoading) {
+  if (isLoading && !safetyTimeoutExpired) {
     return (
       <div className="min-h-[60vh] flex flex-col items-center justify-center p-8 space-y-3 animate-fade-in">
         <div className="w-10 h-10 rounded-2xl bg-terracotta-50 border border-terracotta-200 text-terracotta-600 flex items-center justify-center shadow-warm-sm">
@@ -44,7 +57,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
     );
   }
 
-  if (requireAuth && !isAuthenticated) {
+  if ((requireAuth && !isAuthenticated) || (safetyTimeoutExpired && !isAuthenticated)) {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 

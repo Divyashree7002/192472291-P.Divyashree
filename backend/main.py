@@ -51,20 +51,22 @@ ALLOWED_ORIGINS = [
     "http://127.0.0.1:8000",
     "http://localhost:8001",
     "http://127.0.0.1:8001",
+    "https://smartspace-frontend.onrender.com",
+    "http://smartspace-frontend.onrender.com",
 ]
 
 # Read dynamic FRONTEND_URL and custom ALLOWED_ORIGINS from environment
 frontend_url = os.getenv("FRONTEND_URL", "").strip()
 if frontend_url:
     for url in frontend_url.split(","):
-        cleaned = url.strip()
+        cleaned = url.strip().rstrip("/")
         if cleaned and cleaned not in ALLOWED_ORIGINS:
             ALLOWED_ORIGINS.append(cleaned)
 
 custom_origins = os.getenv("ALLOWED_ORIGINS", "").strip()
 if custom_origins:
     for url in custom_origins.split(","):
-        cleaned = url.strip()
+        cleaned = url.strip().rstrip("/")
         if cleaned and cleaned not in ALLOWED_ORIGINS:
             ALLOWED_ORIGINS.append(cleaned)
 

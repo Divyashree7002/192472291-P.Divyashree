@@ -227,11 +227,52 @@ export interface DesignPlanResponse {
 let apiBaseUrl = DEFAULT_API_BASE;
 
 export function setApiBaseUrl(url: string) {
-  apiBaseUrl = url.replace(/\/+$/, '');
+  if (url && typeof url === 'string') {
+    apiBaseUrl = url.trim();
+  }
 }
 
 export function getApiBaseUrl(): string {
-  return apiBaseUrl;
+  let url = (apiBaseUrl || DEFAULT_API_BASE || '').trim();
+  // Strip trailing slashes
+  url = url.replace(/\/+$/, '');
+
+  // Automatically prepend protocol scheme if missing
+  if (url && !url.startsWith('http://') && !url.startsWith('https://')) {
+    if (url.includes('localhost') || url.includes('127.0.0.1')) {
+      url = `http://${url}`;
+    } else {
+      url = `https://${url}`;
+    }
+  }
+
+  return url;
+}
+
+export async function fetchWithTimeout(
+  url: string,
+  options: RequestInit = {},
+  timeoutMs: number = 8000
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: options.signal || controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err?.name === 'AbortError') {
+      const timeoutErr = new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
+      (timeoutErr as any).isTimeout = true;
+      throw timeoutErr;
+    }
+    throw err;
+  }
 }
 
 export function dataUrlToBlob(dataUrl: string): Blob {
@@ -604,15 +645,16 @@ export function clearAuthToken() {
 }
 
 /**
- * Executes a fetch request with standard connection error formatting.
+ * Executes a fetch request with timeout and standard connection error formatting.
  */
-async function safeAuthFetch(url: string, options: RequestInit): Promise<Response> {
+async function safeAuthFetch(url: string, options: RequestInit, timeoutMs: number = 8000): Promise<Response> {
   try {
-    const response = await fetch(url, options);
+    const response = await fetchWithTimeout(url, options, timeoutMs);
     return response;
   } catch (err: unknown) {
     console.error('[SmartSpace Network Error]:', err);
-    throw new Error('SmartSpace AI server is currently unavailable. Please try again.');
+    const msg = (err as Error)?.message || 'SmartSpace AI server is currently unavailable. Please try again.';
+    throw new Error(msg);
   }
 }
 
@@ -625,7 +667,7 @@ export async function apiRegister(name: string, email: string, password: string)
       Accept: 'application/json',
     },
     body: JSON.stringify({ name: name.trim(), email: email.trim().toLowerCase(), password }),
-  });
+  }, 10000);
 
   if (!response.ok) {
     let errorDetail = '';
@@ -661,7 +703,7 @@ export async function apiLogin(email: string, password: string, rememberMe: bool
       Accept: 'application/json',
     },
     body: JSON.stringify({ email: email.trim().toLowerCase(), password, remember_me: rememberMe }),
-  });
+  }, 10000);
 
   if (!response.ok) {
     let errorDetail = '';
@@ -697,16 +739,21 @@ export async function apiGetMe(): Promise<{ user: AuthUser }> {
 
   let response: Response;
   try {
-    response = await fetch(`${baseUrl}/api/auth/me`, {
+    response = await fetchWithTimeout(`${baseUrl}/api/auth/me`, {
       method: 'GET',
       headers: {
         Accept: 'application/json',
         Authorization: `Bearer ${token}`,
       },
-    });
+    }, 8000);
   } catch (err: unknown) {
     console.error('[SmartSpace Auth] Profile verification connection issue:', err);
-    const networkErr = new Error('SmartSpace AI server is currently unavailable. Please try again.');
+    const isTimeout = (err as any)?.isTimeout;
+    const networkErr = new Error(
+      isTimeout
+        ? 'Session verification timed out. Please check your connection.'
+        : 'SmartSpace AI server is currently unavailable. Please try again.'
+    );
     (networkErr as any).isNetworkError = true;
     throw networkErr;
   }
@@ -726,14 +773,16 @@ export async function apiGetMe(): Promise<{ user: AuthUser }> {
       (authErr as any).isAuthExpired = true;
       throw authErr;
     }
-    throw new Error(errorDetail || 'Failed to authenticate user profile');
+    throw new Error(errorDetail || `Failed to authenticate user profile (HTTP ${response.status})`);
   }
 
   const data = await response.json();
   // Update stored user with freshly verified data
-  if (data.user) {
+  if (data && data.user) {
     const isRemembered = localStorage.getItem(AUTH_REMEMBER_KEY) === 'true';
     setStoredSession(token, data.user, isRemembered);
+  } else {
+    throw new Error('Invalid user profile response from server.');
   }
   return data;
 }

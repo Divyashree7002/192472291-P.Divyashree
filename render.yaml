@@ -19,7 +19,7 @@ services:
       - key: SMARTSPACE_JWT_SECRET
         generateValue: true
       - key: FRONTEND_URL
-        sync: false
+        value: https://smartspace-frontend.onrender.com
       - key: INITIAL_ADMIN_EMAIL
         value: admin@smartspace.ai
       - key: INITIAL_ADMIN_PASSWORD
@@ -49,7 +49,4 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_API_BASE_URL
-        fromService:
-          type: web
-          name: smartspace-backend
-          property: host
+        value: https://smartspace-backend-mwdg.onrender.com

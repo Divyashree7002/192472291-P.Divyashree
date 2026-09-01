@@ -87,39 +87,57 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
+    // Safety timeout fallback: resolve session check within 5 seconds max
+    const safetyTimer = setTimeout(() => {
+      setIsLoading((currentLoading) => {
+        if (currentLoading) {
+          console.warn('[SmartSpace Auth] Session check timed out. Safely resolving as unauthenticated.');
+          clearAuthSession();
+          setUser(null);
+          setToken(null);
+          return false;
+        }
+        return false;
+      });
+    }, 5000);
+
     try {
       const res = await apiGetMe();
-      const userProfile = mapAuthUserToProfile(res.user);
-      setUser(userProfile);
-      setToken(currentToken);
+      clearTimeout(safetyTimer);
+      if (res && res.user) {
+        const userProfile = mapAuthUserToProfile(res.user);
+        setUser(userProfile);
+        setToken(currentToken);
+      } else {
+        throw new Error('Invalid user profile');
+      }
     } catch (err: unknown) {
+      clearTimeout(safetyTimer);
       const isAuthExpired = (err as { isAuthExpired?: boolean })?.isAuthExpired;
-      const isNetworkError = (err as { isNetworkError?: boolean })?.isNetworkError;
+      
+      console.warn('[SmartSpace Auth] Profile verification failed:', err);
+      // Security requirement: On profile verification failure, error, or timeout,
+      // safely resolve as unauthenticated and clear session.
+      clearAuthSession();
+      setUser(null);
+      setToken(null);
 
       if (isAuthExpired) {
-        // Genuinely expired session on the server
-        clearAuthSession();
-        setUser(null);
-        setToken(null);
         addToast({
           title: 'Session Expired',
           description: 'Your session has expired. Please sign in again.',
           type: 'warning',
         });
-      } else if (isNetworkError) {
-        // Server unreachable, but JWT is not expired: retain cached authenticated user
-        console.warn('[SmartSpace Auth] Backend unreachable during session verification. Retaining cached session.');
-      } else {
-        console.warn('[SmartSpace Auth] Profile refresh failed:', err);
       }
     } finally {
+      clearTimeout(safetyTimer);
       setIsLoading(false);
     }
   }, [addToast]);
 
   useEffect(() => {
     refreshUser();
-  }, [refreshUser]);
+  }, []); // Run initial session check once on mount
 
   const login = async (email: string, password: string, rememberMe: boolean = true): Promise<UserProfile> => {
     setIsLoading(true);

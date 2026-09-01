@@ -32,8 +32,20 @@ export const LoginPage: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showDemoAccounts, setShowDemoAccounts] = useState(false);
+  const [authCheckTimedOut, setAuthCheckTimedOut] = useState(false);
 
   const fromState = (location.state as { from?: { pathname?: string } })?.from?.pathname;
+
+  React.useEffect(() => {
+    if (authLoading) {
+      const timer = setTimeout(() => {
+        setAuthCheckTimedOut(true);
+      }, 4000);
+      return () => clearTimeout(timer);
+    } else {
+      setAuthCheckTimedOut(false);
+    }
+  }, [authLoading]);
 
   // Redirect if already authenticated
   React.useEffect(() => {
@@ -85,7 +97,7 @@ export const LoginPage: React.FC = () => {
     setErrorMessage(null);
   };
 
-  if (authLoading) {
+  if (authLoading && !authCheckTimedOut) {
     return (
       <div className="min-h-screen bg-[#F8F5F0] bg-drafting-grid flex items-center justify-center p-4">
         <div className="bg-white rounded-3xl p-8 border border-softBorder shadow-warm-lg flex flex-col items-center justify-center space-y-3">
