@@ -7,7 +7,11 @@
 
 import { RecommendationPlan } from '../types';
 
-const DEFAULT_API_BASE = (import.meta as { env?: { VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL || 'http://127.0.0.1:8001';
+const DEFAULT_API_BASE =
+  (import.meta as { env?: { VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL ||
+  (typeof window !== 'undefined' && window.location.hostname.includes('onrender.com')
+    ? 'https://smartspace-backend-mwdg.onrender.com'
+    : 'http://127.0.0.1:8001');
 
 export interface HealthCheckResponse {
   status: 'online' | 'offline';
@@ -252,20 +256,36 @@ export function getApiBaseUrl(): string {
 export async function fetchWithTimeout(
   url: string,
   options: RequestInit = {},
-  timeoutMs: number = 8000
+  timeoutMs: number = 6000
 ): Promise<Response> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
+  let onExternalAbort: (() => void) | undefined;
+  if (options.signal) {
+    if (options.signal.aborted) {
+      controller.abort();
+    } else {
+      onExternalAbort = () => controller.abort();
+      options.signal.addEventListener('abort', onExternalAbort);
+    }
+  }
+
   try {
     const response = await fetch(url, {
       ...options,
-      signal: options.signal || controller.signal,
+      signal: controller.signal,
     });
     clearTimeout(timeoutId);
+    if (options.signal && onExternalAbort) {
+      options.signal.removeEventListener('abort', onExternalAbort);
+    }
     return response;
   } catch (err: any) {
     clearTimeout(timeoutId);
+    if (options.signal && onExternalAbort) {
+      options.signal.removeEventListener('abort', onExternalAbort);
+    }
     if (err?.name === 'AbortError') {
       const timeoutErr = new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
       (timeoutErr as any).isTimeout = true;
@@ -730,7 +750,10 @@ export async function apiLogin(email: string, password: string, rememberMe: bool
   return data;
 }
 
-export async function apiGetMe(): Promise<{ user: AuthUser }> {
+export async function apiGetMe(
+  timeoutMs: number = 6000,
+  externalSignal?: AbortSignal
+): Promise<{ user: AuthUser }> {
   const baseUrl = getApiBaseUrl();
   const token = getAuthToken();
   if (!token) {
@@ -745,16 +768,18 @@ export async function apiGetMe(): Promise<{ user: AuthUser }> {
         Accept: 'application/json',
         Authorization: `Bearer ${token}`,
       },
-    }, 8000);
+      signal: externalSignal,
+    }, timeoutMs);
   } catch (err: unknown) {
     console.error('[SmartSpace Auth] Profile verification connection issue:', err);
-    const isTimeout = (err as any)?.isTimeout;
+    const isTimeout = (err as any)?.isTimeout || (err as any)?.name === 'AbortError';
     const networkErr = new Error(
       isTimeout
         ? 'Session verification timed out. Please check your connection.'
         : 'SmartSpace AI server is currently unavailable. Please try again.'
     );
     (networkErr as any).isNetworkError = true;
+    (networkErr as any).isTimeout = isTimeout;
     throw networkErr;
   }
 

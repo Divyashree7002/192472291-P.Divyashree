@@ -74,7 +74,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return null;
   });
 
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoading, setIsLoading] = useState<boolean>(() => {
+    const existingToken = getAuthToken();
+    return Boolean(existingToken && !isTokenExpired(existingToken));
+  });
   const { addToast } = useToast();
 
   const refreshUser = useCallback(async () => {
@@ -87,22 +90,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
-    // Safety timeout fallback: resolve session check within 5 seconds max
+    const controller = new AbortController();
+    const timeoutMs = 6000; // Short 6-second timeout for initial session verification
+
     const safetyTimer = setTimeout(() => {
-      setIsLoading((currentLoading) => {
-        if (currentLoading) {
-          console.warn('[SmartSpace Auth] Session check timed out. Safely resolving as unauthenticated.');
-          clearAuthSession();
-          setUser(null);
-          setToken(null);
-          return false;
-        }
-        return false;
-      });
-    }, 5000);
+      console.warn('[SmartSpace Auth] Session check timed out (6s). Safely resolving as unauthenticated.');
+      controller.abort();
+      clearAuthSession();
+      setUser(null);
+      setToken(null);
+      setIsLoading(false);
+    }, timeoutMs);
 
     try {
-      const res = await apiGetMe();
+      const res = await apiGetMe(timeoutMs, controller.signal);
       clearTimeout(safetyTimer);
       if (res && res.user) {
         const userProfile = mapAuthUserToProfile(res.user);

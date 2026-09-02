@@ -29,7 +29,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
       const timer = setTimeout(() => {
         console.warn('[SmartSpace Auth] ProtectedRoute safety timeout reached.');
         setSafetyTimeoutExpired(true);
-      }, 4000);
+      }, 6000);
       return () => clearTimeout(timer);
     } else {
       setSafetyTimeoutExpired(false);

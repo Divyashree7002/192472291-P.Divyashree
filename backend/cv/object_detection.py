@@ -376,6 +376,43 @@ class BaseDetector(ABC):
         pass
 
 
+import threading
+
+_GLOBAL_YOLO_MODEL = None
+_GLOBAL_YOLO_INITIALIZED = False
+_GLOBAL_YOLO_LOCK = threading.Lock()
+
+
+def get_shared_yolo_model(model_name: str = "yolov8n.pt"):
+    global _GLOBAL_YOLO_MODEL, _GLOBAL_YOLO_INITIALIZED
+    if not _GLOBAL_YOLO_INITIALIZED:
+        with _GLOBAL_YOLO_LOCK:
+            if not _GLOBAL_YOLO_INITIALIZED:
+                os.environ["OMP_NUM_THREADS"] = "1"
+                os.environ["OPENBLAS_NUM_THREADS"] = "1"
+                os.environ["MKL_NUM_THREADS"] = "1"
+                os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+                os.environ["NUMEXPR_NUM_THREADS"] = "1"
+                os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+                try:
+                    import torch
+                    torch.set_num_threads(1)
+                except Exception:
+                    pass
+
+                try:
+                    from ultralytics import YOLO
+                    os.environ["YOLO_VERBOSE"] = "False"
+                    logger.info(f"[SmartSpace CV] Loading shared Ultralytics YOLO model '{model_name}' once...")
+                    _GLOBAL_YOLO_MODEL = YOLO(model_name)
+                    logger.info("[SmartSpace CV] Shared YOLO model loaded successfully.")
+                except BaseException as e:
+                    logger.warning(f"[SmartSpace CV] YOLO model load standby ({str(e)}). Activating OpenCV Spatial CV engine.")
+                    _GLOBAL_YOLO_MODEL = None
+                _GLOBAL_YOLO_INITIALIZED = True
+    return _GLOBAL_YOLO_MODEL
+
+
 class YOLODetector(BaseDetector):
     """
     Ultralytics YOLO & OpenCV DNN object detector fine-tuned for real-time indoor scene parsing.
@@ -384,7 +421,6 @@ class YOLODetector(BaseDetector):
 
     def __init__(self, model_name: str = "yolov8n.pt"):
         self.model_name = model_name
-        self.yolo_model = None
         self.dnn_net = None
         self.last_ignored_objects: List[Dict[str, Any]] = []
         self.last_ignored_summary: Dict[str, Any] = {
@@ -395,23 +431,10 @@ class YOLODetector(BaseDetector):
             "personal_items_count": 0,
             "descriptions": [],
         }
-        self._init_models()
 
-    def _init_models(self):
-        """Initializes Ultralytics YOLO or OpenCV Spatial CV engine."""
-        os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-        os.environ["OMP_NUM_THREADS"] = "1"
-        try:
-            from ultralytics import YOLO
-            os.environ["YOLO_VERBOSE"] = "False"
-            self.yolo_model = YOLO(self.model_name)
-            logger.info(f"YOLODetector successfully loaded Ultralytics {self.model_name}")
-            return
-        except BaseException as e:
-            logger.info(
-                f"Ultralytics PyTorch backend standby ({str(e)}). Activating OpenCV Spatial CV engine."
-            )
-            self.yolo_model = None
+    @property
+    def yolo_model(self):
+        return get_shared_yolo_model(self.model_name)
 
     def detect(
         self, image_bgr: np.ndarray, conf_threshold: float = 0.25

@@ -40,7 +40,7 @@ export const LoginPage: React.FC = () => {
     if (authLoading) {
       const timer = setTimeout(() => {
         setAuthCheckTimedOut(true);
-      }, 4000);
+      }, 6000);
       return () => clearTimeout(timer);
     } else {
       setAuthCheckTimedOut(false);

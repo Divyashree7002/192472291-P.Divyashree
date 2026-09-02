@@ -12,10 +12,8 @@ import {
   Sparkles,
   AlertTriangle,
   Upload,
-  Server,
   Image as ImageIcon,
   Compass,
-  Layers
 } from 'lucide-react';
 import { useWebcam } from '../../hooks/useWebcam';
 import { Button } from '../ui/Button';
@@ -111,6 +109,8 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
     setInternalCapturedImage(null);
     setFileError(null);
     setViewMode('rgb');
+    setGuidedStep(1);
+    setPhaseDetections({});
     if (onRetake) onRetake();
     await startCamera();
   };
@@ -128,18 +128,6 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
       if (onCapture) {
         onCapture(frame);
       }
-    }
-  };
-
-  const handleRetake = () => {
-    setInternalCapturedImage(null);
-    setFileError(null);
-    setViewMode('rgb');
-    if (onRetake) {
-      onRetake();
-    }
-    if (!isActive) {
-      startCamera();
     }
   };
 
@@ -180,17 +168,25 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
   const [scanMode, setScanMode] = useState<'guided' | 'single'>('guided');
   const [guidedStep, setGuidedStep] = useState<number>(1);
   const [scanQuality, setScanQuality] = useState<'good' | 'move_slower' | 'keep_steady' | 'too_dark'>('good');
+  const [phaseDetections, setPhaseDetections] = useState<Record<number, string[]>>({});
 
   const guidedStepsList = [
     { step: 1, title: 'Front Wall', instruction: 'Point the camera toward the front wall.' },
-    { step: 2, title: 'Left Side', instruction: 'Slowly turn toward the left.' },
+    { step: 2, title: 'Left Side', instruction: 'Slowly turn toward the left side of the room.' },
     { step: 3, title: 'Right Side', instruction: 'Capture the right side of the room.' },
-    { step: 4, title: 'Openings', instruction: 'Capture doors and windows.' },
+    { step: 4, title: 'Openings', instruction: 'Focus on doors and windows.' },
     { step: 5, title: 'Furniture', instruction: 'Capture main room furniture.' },
-    { step: 6, title: 'Floor', instruction: 'Tilt slightly toward the floor.' },
+    { step: 6, title: 'Floor', instruction: 'Tilt camera slightly toward the floor.' },
   ];
 
   const handleNextGuidedStep = () => {
+    const frame = captureFrame();
+    if (frame) {
+      setInternalCapturedImage(frame);
+      if (onCapture) {
+        onCapture(frame);
+      }
+    }
     if (guidedStep < 6) {
       setGuidedStep((prev) => prev + 1);
     } else {
@@ -198,11 +194,51 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
     }
   };
 
-  const currentGuidedStepObj = guidedStepsList[guidedStep - 1];
+  // PROBLEM 4 FIX: Recapture MUST reset state back to SCAN 1/6
+  const handleRetake = () => {
+    setInternalCapturedImage(null);
+    setFileError(null);
+    setViewMode('rgb');
+    setGuidedStep(1); // Reset phase back to 1
+    setPhaseDetections({}); // Clear stale detection results
+    setScanQuality('good');
+    if (onRetake) {
+      onRetake();
+    }
+    if (!isActive) {
+      startCamera();
+    }
+  };
 
+  const currentGuidedStepObj = guidedStepsList[guidedStep - 1];
   const isProcessing = processingState === 'uploading' || processingState === 'analyzing';
   const effectiveDim = imageDimensions || naturalDim;
   const displayedImage = viewMode === 'depth' && depthVisualization ? depthVisualization : currentImage;
+
+  // PROBLEM 2 & 5 FIX: Dynamically compute real detection labels from actual CV results
+  const realDetectedLabels = React.useMemo(() => {
+    if (!detectedObjects || detectedObjects.length === 0) return [];
+    const labels = new Set<string>();
+    detectedObjects.forEach((obj) => {
+      const cls = (obj.class_name || '').replace(/_/g, ' ');
+      if (cls) {
+        labels.add(cls.charAt(0).toUpperCase() + cls.slice(1));
+      }
+    });
+    return Array.from(labels);
+  }, [detectedObjects]);
+
+  // Sync real detection labels to current phase step when detectedObjects update
+  useEffect(() => {
+    if (realDetectedLabels.length > 0) {
+      setPhaseDetections((prev) => ({
+        ...prev,
+        [guidedStep]: realDetectedLabels,
+      }));
+    }
+  }, [realDetectedLabels, guidedStep]);
+
+  const currentDetections = phaseDetections[guidedStep] || [];
 
   return (
     <div className="relative w-full rounded-2xl overflow-hidden bg-white border border-softBorder shadow-warm-md flex flex-col">
@@ -216,7 +252,7 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
         id="room-image-upload-input"
       />
 
-      {/* Top HUD Controls Bar */}
+      {/* Top Controls Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 bg-[#FAF7F2] border-b border-softBorder z-20">
         <div className="flex items-center gap-2.5 flex-wrap">
           <div className="flex items-center gap-1.5">
@@ -224,7 +260,6 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
             <span className="text-xs font-bold text-charcoal-900">Live Viewfinder</span>
           </div>
 
-          {/* Mode Switcher */}
           <div className="flex items-center bg-white rounded-xl p-0.5 border border-softBorder shadow-warm-sm text-xs font-semibold">
             <button
               onClick={() => setScanMode('guided')}
@@ -248,10 +283,6 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
             </button>
           </div>
 
-          <span className="text-[11px] font-semibold text-amber-900 bg-amber-100 px-2.5 py-1 rounded-full border border-amber-300">
-            Recommended: Detailed Scan provides better room understanding.
-          </span>
-
           {cameraState === 'active' && (
             <Badge variant="sage" size="sm" icon={<span className="w-1.5 h-1.5 rounded-full bg-sage-500 animate-ping" />}>
               Camera Active
@@ -269,12 +300,8 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
           {cameraState === 'stopped' && (
             <Badge variant="neutral" size="sm">Camera Stopped</Badge>
           )}
-          {cameraState === 'not_started' && (
-            <Badge variant="neutral" size="sm">Camera Not Started</Badge>
-          )}
         </div>
 
-        {/* Viewfinder Overlays Controls */}
         <div className="flex items-center gap-2">
           {depthVisualization && (
             <div className="flex items-center bg-white rounded-xl p-0.5 border border-softBorder shadow-warm-sm text-xs">
@@ -344,8 +371,45 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
         </div>
       </div>
 
-      {/* Main Viewfinder Canvas */}
-      <div className="relative aspect-video w-full bg-[#F4EFEA] flex items-center justify-center overflow-hidden">
+      {/* PROBLEM 1 FIX: GUIDED SCAN HEADER BANNER POSITIONED ABOVE CAMERA IMAGE */}
+      {scanMode === 'guided' && (
+        <div className="px-4 py-3 bg-[#FCFBF9] border-b border-softBorder flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div className="space-y-0.5">
+            <div className="flex items-center gap-2">
+              <span className="px-2.5 py-0.5 rounded-md bg-terracotta-500 text-white font-mono font-bold text-xs shadow-sm">
+                SCAN {guidedStep}/6
+              </span>
+              <span className="font-bold text-sm text-charcoal-900 tracking-tight">
+                {currentGuidedStepObj.title}
+              </span>
+            </div>
+            <p className="text-xs text-charcoal-600 font-medium leading-relaxed">
+              {currentGuidedStepObj.instruction}
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-white border border-softBorder text-xs font-semibold text-charcoal-700 shadow-warm-sm">
+              <span className={`w-2 h-2 rounded-full ${
+                scanQuality === 'good' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+              }`} />
+              <span>{scanQuality === 'good' ? '🟢 Good scan' : '🟡 Keep steady'}</span>
+            </div>
+
+            {isActive && !currentImage && (
+              <button
+                onClick={handleNextGuidedStep}
+                className="px-3 py-1.5 rounded-xl bg-terracotta-500 hover:bg-terracotta-600 text-white text-xs font-bold shadow-terracotta transition-all"
+              >
+                {guidedStep === 6 ? 'Complete Scan' : `Next Step (Phase ${guidedStep + 1}) →`}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* PROBLEM 1 & 6 FIX: CLEAN CAMERA / ROOM IMAGE VIEWPORT (ZERO BADGES OR OVERLAYS ON TOP OF IMAGE) */}
+      <div className="relative aspect-[4/3] sm:aspect-video min-h-[340px] sm:min-h-[460px] w-full max-w-full overflow-hidden bg-[#F4EFEA] flex items-center justify-center">
         <video
           ref={videoRef}
           autoPlay
@@ -354,63 +418,7 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
           className={`w-full h-full object-cover ${isActive && !currentImage ? 'block' : 'hidden'}`}
         />
 
-        {/* GUIDED SCAN OVERLAY (WHEN CAMERA ACTIVE) */}
-        {isActive && !currentImage && scanMode === 'guided' && (
-          <div className="absolute top-4 left-4 right-4 z-20 flex flex-col sm:flex-row items-center justify-between gap-2 p-3.5 rounded-2xl bg-charcoal-900/85 backdrop-blur-md text-white border border-white/10 shadow-2xl">
-            <div className="space-y-0.5 text-center sm:text-left">
-              <div className="flex items-center justify-center sm:justify-start gap-2">
-                <span className="px-2 py-0.5 rounded-md bg-terracotta-500 text-white font-mono font-bold text-xs">
-                  SCAN {guidedStep}/6
-                </span>
-                <span className="font-bold text-sm tracking-tight">{currentGuidedStepObj.title}</span>
-              </div>
-              <p className="text-xs text-charcoal-200">{currentGuidedStepObj.instruction}</p>
-            </div>
-
-            {/* Quality Indicator Pill */}
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-white/10 text-xs font-semibold">
-                <span className={`w-2 h-2 rounded-full ${
-                  scanQuality === 'good' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
-                }`} />
-                <span>
-                  {scanQuality === 'good'
-                    ? '🟢 Good scan'
-                    : scanQuality === 'move_slower'
-                    ? '🟡 Move slower'
-                    : '🟡 Keep camera steady'}
-                </span>
-              </div>
-
-              <button
-                onClick={handleNextGuidedStep}
-                className="px-3 py-1.5 rounded-xl bg-terracotta-500 hover:bg-terracotta-600 text-white text-xs font-bold shadow-terracotta transition-all"
-              >
-                {guidedStep === 6 ? 'Complete Scan' : 'Next Step →'}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* SUBTLE LIVE DETECTION OVERLAYS */}
-        {isActive && !currentImage && (
-          <div className="absolute bottom-4 left-4 z-20 flex items-center gap-1.5 flex-wrap pointer-events-none">
-            <span className="px-2.5 py-1 rounded-lg bg-emerald-950/80 backdrop-blur-xs text-emerald-300 text-[11px] font-semibold border border-emerald-500/30 flex items-center gap-1">
-              ✓ Wall detected
-            </span>
-            <span className="px-2.5 py-1 rounded-lg bg-emerald-950/80 backdrop-blur-xs text-emerald-300 text-[11px] font-semibold border border-emerald-500/30 flex items-center gap-1">
-              ✓ Floor detected
-            </span>
-            <span className="px-2.5 py-1 rounded-lg bg-emerald-950/80 backdrop-blur-xs text-emerald-300 text-[11px] font-semibold border border-emerald-500/30 flex items-center gap-1">
-              ✓ Sofa detected
-            </span>
-            <span className="px-2.5 py-1 rounded-lg bg-emerald-950/80 backdrop-blur-xs text-emerald-300 text-[11px] font-semibold border border-emerald-500/30 flex items-center gap-1">
-              ✓ Window detected
-            </span>
-          </div>
-        )}
-
-        {/* Captured Freeze-Frame / Depth Map View with Detection Overlay */}
+        {/* Captured Photo / Depth View */}
         {displayedImage && (
           <div className="relative w-full h-full">
             <img
@@ -426,7 +434,7 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
               }}
             />
 
-            {/* Interactive Detection Overlay */}
+            {/* Interactive Detection Overlay (Bounding Boxes Only) */}
             <DetectionOverlay
               objects={detectedObjects}
               originalWidth={effectiveDim.width}
@@ -436,21 +444,10 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
               selectedObjectId={selectedObjectId}
               onSelectObject={onSelectObject}
             />
-
-            <div className="absolute top-4 left-4 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-xl border border-softBorder text-xs text-charcoal-800 shadow-warm-sm font-semibold flex items-center gap-2 z-30">
-              <span className="w-2 h-2 rounded-full bg-sage-500" />
-              <span>
-                {viewMode === 'depth'
-                  ? 'Inferno Monocular Depth Colormap'
-                  : detectedObjects.length > 0
-                  ? `Spatial Scene: ${detectedObjects.length} Objects Detected`
-                  : 'Room Image Staged for Reconstruction'}
-              </span>
-            </div>
           </div>
         )}
 
-        {/* Fallback Display */}
+        {/* Fallback Screen when Camera not active */}
         {!isActive && !currentImage && (
           <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-drafting-grid bg-[#FAF6F0]">
             <div className="w-16 h-16 rounded-2xl bg-white border border-softBorder flex items-center justify-center text-terracotta-500 mb-4 shadow-warm-md">
@@ -492,7 +489,7 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
           </div>
         )}
 
-        {/* Spatial HUD Overlay */}
+        {/* Spatial HUD Framing Corners (Clean - No Text Badges) */}
         {isActive && !currentImage && (
           <div className="absolute inset-0 pointer-events-none z-10">
             {showGrid && <div className="absolute inset-0 bg-drafting-grid opacity-60" />}
@@ -514,7 +511,40 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
         )}
       </div>
 
-      {/* Action Bar */}
+      {/* PROBLEM 1 & 5 FIX: DEDICATED DETECTION STATUS SECTION POSITIONED DIRECTLY BELOW CAMERA IMAGE */}
+      <div className="px-4 py-3.5 bg-[#FCFBF9] border-t border-softBorder space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-xs font-bold text-charcoal-900">
+            <Compass className="w-4 h-4 text-terracotta-600" />
+            <span>Detection Status — {currentGuidedStepObj.title} (Phase {guidedStep}/6)</span>
+          </div>
+          <span className="text-[10px] font-mono text-terracotta-700 bg-terracotta-100 px-2 py-0.5 rounded border border-terracotta-200 font-semibold">
+            Real CV Analysis
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 pt-0.5">
+          {currentDetections.length > 0 ? (
+            currentDetections.map((label, idx) => (
+              <span
+                key={idx}
+                className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-semibold flex items-center gap-1.5 animate-fade-in"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                ✓ {label} detected
+              </span>
+            ))
+          ) : (
+            <span className="text-xs text-charcoal-500 italic bg-white px-3 py-1 rounded-lg border border-softBorder">
+              {isActive || currentImage
+                ? 'No confident objects detected in this frame. Point camera at room walls, openings, or furniture.'
+                : 'Start camera or upload an image to begin live room scanning.'}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Action Bar / Controls Below Detection Status */}
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 bg-[#FAF7F2] border-t border-softBorder text-xs">
         <div className="flex items-center gap-2 text-charcoal-600">
           <Info className="w-3.5 h-3.5 text-terracotta-600 shrink-0" />
@@ -531,7 +561,7 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
                 leftIcon={<RotateCcw className="w-3.5 h-3.5" />}
                 disabled={isProcessing}
               >
-                Retake / New Photo
+                Recapture / Reset Scan
               </Button>
               <Button
                 onClick={onAnalyze}
@@ -553,6 +583,14 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
                 leftIcon={<RefreshCw className="w-3.5 h-3.5" />}
               >
                 Capture Frame
+              </Button>
+              <Button
+                onClick={handleNextGuidedStep}
+                variant="primary"
+                size="sm"
+                className="shadow-terracotta font-semibold"
+              >
+                {guidedStep === 6 ? 'Complete Scan' : `Next Step (Phase ${guidedStep + 1}) →`}
               </Button>
               <Button
                 onClick={handleStopCamera}
@@ -578,7 +616,7 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
                 isLoading={isLoading}
                 variant="primary"
                 size="sm"
-                leftIcon={<Camera className="w-3.5 h-3.5" />}
+                leftIcon={<Camera className="w-4 h-4" />}
               >
                 Start Camera
               </Button>
